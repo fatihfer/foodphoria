@@ -3,87 +3,138 @@ defined('BASEPATH') or exit('No direct script access allowed');
 
 class Pendapatan_model extends CI_Model
 {
-    // 🔹 List all pendapatan (offline + online with details)
-    public function get_all()
+    // ✅ Generate ID format
+    private function generate_id($prefix)
     {
-        $offline = $this->db->order_by('tanggal', 'DESC')->get('pendapatan_offline')->result_array();
-        $online = $this->db->order_by('tanggal', 'DESC')->get('pendapatan_online')->result_array();
-
-        foreach ($online as &$o) {
-            $o['details'] = $this->db
-                ->where('pendapatan_online_id', $o['id'])
-                ->get('pendapatan_online_detail')
-                ->result_array();
-        }
-
-        return [
-            'offline' => $offline,
-            'online' => $online
-        ];
+        $date = date('Ymd');
+        $count = $this->db->like('id', $prefix . '-' . $date, 'after')->from($this->db->get_compiled_select())->count_all_results();
+        $number = str_pad($count + 1, 4, '0', STR_PAD_LEFT);
+        return $prefix . '-' . $date . '-' . $number;
     }
 
-    // 🔹 Insert offline pendapatan
+    // ✅ Insert pendapatan offline
     public function insert_offline($data)
     {
-        $data['id'] = generate_pof_id($data['tanggal']);
-        return $this->db->insert('pendapatan_offline', $data);
+        $id = $this->generate_id("POF");
+        $insert = [
+            'id' => $id,
+            'cabang_id' => $data['cabang_id'],
+            'tanggal' => $data['tanggal'],
+            'jumlah' => $data['jumlah'],
+            'keterangan' => $data['keterangan'] ?? null
+        ];
+        $this->db->insert('pendapatan_offline', $insert);
+
+        $this->update_total_omset($data['cabang_id'], $data['tanggal']);
+
+        return ["status" => true, "id" => $id];
     }
 
-    // 🔹 Insert online pendapatan with details
+    // ✅ Insert pendapatan online
     public function insert_online($data)
     {
-        $this->db->trans_start();
-
-        $online_id = generate_pon_id($data['tanggal']);
-        $total = 0;
-
-        foreach ($data['details'] as $d) {
-            $detail_data = [
-                'id' => generate_pod_id($data['tanggal']),
-                'pendapatan_online_id' => $online_id,
-                'sumber' => $d['sumber'],
-                'keterangan' => $d['keterangan'] ?? null,
-                'jumlah' => $d['jumlah']
-            ];
-            $total += $d['jumlah'];
-            $this->db->insert('pendapatan_online_detail', $detail_data);
-        }
-
-        $this->db->insert('pendapatan_online', [
-            'id' => $online_id,
+        $id = $this->generate_id("PON");
+        $insert = [
+            'id' => $id,
+            'cabang_id' => $data['cabang_id'],
             'tanggal' => $data['tanggal'],
-            'total' => $total,
-            'cabang_id' => $data['cabang_id']
-        ]);
+            'jumlah' => $data['jumlah'],
+            'platform' => $data['platform'] ?? null
+        ];
+        $this->db->insert('pendapatan_online', $insert);
 
-        $this->db->trans_complete();
+        $this->update_total_omset($data['cabang_id'], $data['tanggal']);
 
-        return $this->db->trans_status();
+        return ["status" => true, "id" => $id];
     }
 
-    // 🔹 Update total_omset automatically
+    // ✅ Insert detail online
+    public function insert_online_detail($data)
+    {
+        $id = $this->generate_id("POD");
+        $insert = [
+            'id' => $id,
+            'pendapatan_online_id' => $data['pendapatan_online_id'],
+            'jumlah' => $data['jumlah'],
+            'keterangan' => $data['keterangan'] ?? null
+        ];
+        $this->db->insert('pendapatan_online_detail', $insert);
+
+        // Update total pendapatan_online
+        $this->update_online_total($data['pendapatan_online_id']);
+
+        return ["status" => true, "id" => $id];
+    }
+
+    // ✅ Update detail online
+    public function update_online_detail($id, $data)
+    {
+        $this->db->where('id', $id)->update('pendapatan_online_detail', [
+            'jumlah' => $data['jumlah'],
+            'keterangan' => $data['keterangan'] ?? null
+        ]);
+
+        // Ambil parent online
+        $parent = $this->db->get_where('pendapatan_online', ['id' =>
+            $data['pendapatan_online_id']])->row();
+
+        if ($parent) {
+            $this->update_online_total($parent->id);
+        }
+
+        return ["status" => true, "id" => $id];
+    }
+
+    // ✅ Hitung ulang total pendapatan_online
+    private function update_online_total($online_id)
+    {
+        $total = $this->db->select_sum('jumlah')
+            ->from('pendapatan_online_detail')
+            ->where('pendapatan_online_id', $online_id)
+            ->get()->row()->jumlah ?? 0;
+
+        $this->db->where('id', $online_id)
+            ->update('pendapatan_online', ['jumlah' => $total]);
+
+        // Update juga total omset
+        $online = $this->db->get_where('pendapatan_online', ['id' => $online_id])->row();
+        if ($online) {
+            $this->update_total_omset($online->cabang_id, $online->tanggal);
+        }
+    }
+
+    // ✅ Update total omset
     public function update_total_omset($cabang_id, $tanggal)
     {
-        $offline = $this->db->select_sum('penjualan_cash')
-                            ->where(['cabang_id'=>$cabang_id, 'tanggal'=>$tanggal])
-                            ->get('pendapatan_offline')
-                            ->row()->penjualan_cash ?? 0;
+        if (empty($cabang_id)) {
+            $cabang_id = "CBG-001"; // fallback default
+        }
 
-        $online = $this->db->select_sum('total')
-                            ->where(['cabang_id'=>$cabang_id, 'tanggal'=>$tanggal])
-                            ->get('pendapatan_online')
-                            ->row()->total ?? 0;
+        $offline = $this->db->select_sum('jumlah')
+            ->from('pendapatan_offline')
+            ->where('cabang_id', $cabang_id)
+            ->where('DATE(tanggal)', $tanggal)
+            ->get()->row()->jumlah ?? 0;
+
+        $online = $this->db->select_sum('jumlah')
+            ->from('pendapatan_online')
+            ->where('cabang_id', $cabang_id)
+            ->where('DATE(tanggal)', $tanggal)
+            ->get()->row()->jumlah ?? 0;
 
         $total = $offline + $online;
 
-        $existing = $this->db->get_where('total_omset', ['cabang_id'=>$cabang_id, 'tanggal'=>$tanggal])->row();
+        $cek = $this->db->get_where('total_omset', [
+            'cabang_id' => $cabang_id,
+            'tanggal' => $tanggal
+        ])->row();
 
-        if ($existing) {
-            $this->db->update('total_omset', [
+        if ($cek) {
+            $this->db->where('id', $cek->id)->update('total_omset', [
                 'total_omset_offline' => $offline,
                 'total_omset_online' => $online,
                 'total_omset' => $total
-            ], ['id'=>$existing->id]);
+            ]);
         } else {
             $this->db->insert('total_omset', [
                 'cabang_id' => $cabang_id,
