@@ -162,7 +162,7 @@ class Pengeluaran_model extends CI_Model
         return $this->db->trans_status();
     }
 
-    // 🔹 Delete pengeluaran
+    // 🔹 Delete pengeluarann
     public function delete($id)
     {
         $this->db->trans_start();

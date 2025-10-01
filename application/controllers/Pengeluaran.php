@@ -14,7 +14,7 @@ class Pengeluaran extends CI_Controller
 
     // ... create, index, show, update, delete tetap sama
 
-    // 🔹 Update satu detail
+    // 🔹 Update satu detaill
     public function update_detail($detail_id)
     {
         require_role("manager_resto");

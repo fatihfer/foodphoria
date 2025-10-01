@@ -29,7 +29,7 @@ class Pendapatan extends CI_Controller
         echo json_encode($result);
     }
 
-    // ✅ Tambah detail online
+    // ✅ Tambah detail onlinee
     public function add_online_detail()
     {
         $data = json_decode($this->input->raw_input_stream, true);

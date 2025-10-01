@@ -66,7 +66,7 @@ class Pendapatan_model extends CI_Model
         return ["status" => true, "id" => $id];
     }
 
-    // ✅ Update detail online
+    // ✅ Update detail onlinee
     public function update_online_detail($id, $data)
     {
         $this->db->where('id', $id)->update('pendapatan_online_detail', [
